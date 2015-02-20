@@ -3,6 +3,7 @@
 """
 Varnish Plugin for NewRelic
 """
+from xml.etree import ElementTree
 import helper
 import logging
 import subprocess
@@ -18,6 +19,22 @@ class NewRelicVarnishPlugin(helper.Controller):
 
   def __init__(self, args, operating_system):
     super(NewRelicVarnish, self).__init__(args, operating_system)
+
+
+  def setup(self):
+    self.http_headers['X-License-Key'] = self.license_key
+
+
+  @property
+  def http_headers(self):
+    return {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'}
+
+
+  @property
+  def license_key(self):
+    return self.config.application.license_key
 
 
   def process(self):
@@ -39,12 +56,24 @@ class NewRelicVarnishPlugin(helper.Controller):
         error_msg = 'Failed to fetch varnishstats'.join([err])
         logging.error(error_msg);
         raise Exception(error_msg)
+    return out
+
+
+  def parse(self, output):
+      result = []
+      try:
+        stats = ElementTree.XML(output)
+      expect Exception:
+        raise
+      for stat in stats.iter(tag='stat'):
+          metrics = []
+          for prop in stat:
+              metrics.append((prop.tag, prop.text))
+          result.append(dict(metrics))
+      return result
 
 
   def package_stats(self, stats):
-    try:
-      stats = self.get_varnish_stats()
-    except Exception as inst:
     components = {
         'name': self.app_name,
         'guid': self.guid,
@@ -55,16 +84,20 @@ class NewRelicVarnishPlugin(helper.Controller):
 
 
   def fetch(self):
-    stats = self.get_varnish_stats()
+    try:
+      xml = self.get_varnish_stats()
+      stats = self.parse(xml)
+    except Exception as inst:
+      raise
     return self.package_stats(stats)
 
   
-  def send(self, data):
+  def send(self, package):
     try:
       response = requests.post(self.endpoint,
           headers=self.http_headers,
           proxies=self.proxies,
-          data=json.dumps(data, ensure_ascii=False),
+          data=json.dumps(package, ensure_ascii=False),
           timeout=self.config.get('newrelic_api_timeout', 10),
           verify=self.config.get('verify_ssl_cert', True)
     except requests.ConnectionError as error:
